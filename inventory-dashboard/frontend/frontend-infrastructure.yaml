@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Frontend Infrastructure - S3 + CloudFront for AWS Inventory Dashboard
+
+Parameters:
+  CustomDomainName:
+    Type: String
+    Description: Custom domain name (e.g., aws-dashboard.poc.nexturn.com)
+    Default: ""
+
+  ACMCertificateArn:
+    Type: String
+    Description: ACM Certificate ARN for custom domain (must be in us-east-1)
+    Default: ""
+
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for frontend hosting
+    Default: nxt-inventory-dashboard
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
+  HasACMCertificate: !Not [!Equals [!Ref ACMCertificateArn, ""]]
+
+Resources:
+  # S3 Bucket for Frontend
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: AWS Inventory Dashboard Frontend
+        - Key: Project
+          Value: aws-inventory-dashboard
+
+  # CloudFront Origin Access Control
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${S3BucketName}-OAC
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # S3 Bucket Policy for CloudFront
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2008-10-17"
+        Id: PolicyForCloudFrontPrivateContent
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        IPV6Enabled: true
+        Comment: AWS Inventory Dashboard Frontend
+
+        # Custom domain configuration
+        Aliases: !If
+          - HasCustomDomain
+          - - !Ref CustomDomainName
+          - !Ref AWS::NoValue
+
+        # SSL Certificate
+        ViewerCertificate: !If
+          - HasACMCertificate
+          - AcmCertificateArn: !Ref ACMCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+
+        # Origin configuration
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOAC
+            S3OriginConfig: {}
+
+        # Default cache behavior
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingOptimized
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-CORS-S3Origin
+
+        # ✅ SPA ROUTING: Custom error responses for 403/404
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+        # Price class
+        PriceClass: PriceClass_100 # Use only North America and Europe
+
+Outputs:
+  BucketName:
+    Description: S3 Bucket Name
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-BucketName
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub ${AWS::StackName}-DistributionId
+
+  CloudFrontDomainName:
+    Description: CloudFront Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub ${AWS::StackName}-DomainName
+
+  FrontendURL:
+    Description: Frontend URL
+    Value: !If
+      - HasCustomDomain
+      - !Sub https://${CustomDomainName}
+      - !Sub https://${CloudFrontDistribution.DomainName}
+    Export:
+      Name: !Sub ${AWS::StackName}-URL
+
+  DeployCommand:
+    Description: Command to deploy frontend
+    Value: !Sub |
+      # Build frontend
+      cd frontend && npm run build:static
+
+      # Upload to S3
+      aws s3 sync out/ s3://${FrontendBucket} --delete
+
+      # Invalidate CloudFront cache
+      aws cloudfront create-invalidation --distribution-id ${CloudFrontDistribution} --paths "/*"

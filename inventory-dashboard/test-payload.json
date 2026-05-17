@@ -1,0 +1,11 @@
+﻿{
+  "httpMethod": "GET",
+  "path": "/accounts",
+  "queryStringParameters": {},
+  "requestContext": {
+    "authorizer": {
+      "claims": {}
+    },
+    "requestId": "test"
+  }
+}

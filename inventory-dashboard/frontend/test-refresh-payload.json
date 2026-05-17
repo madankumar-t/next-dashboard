@@ -1,0 +1,7 @@
+{
+    "service": "ec2",
+    "accounts": [],
+    "regions": [
+        "us-east-1"
+    ]
+}

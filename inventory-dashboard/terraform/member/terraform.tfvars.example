@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars (local use) or configure as Spacelift environment variables.
+# This stack is deployed once per member account.
+
+# ── Required ─────────────────────────────────────────────────────────────────
+server_account_id      = "123456789012"   # dcli_sharedsvcs2 account ID
+server_lambda_role_arn = "arn:aws:iam::123456789012:role/inventory-dashboard-dev-lambda-execution"
+# ^ obtain from server Terraform output: lambda_execution_role_arn
+
+# ── Optional ─────────────────────────────────────────────────────────────────
+aws_region  = "us-east-1"
+role_name   = "InventoryReadRole"
+# external_id = ""   # must match server Terraform external_id; set as secret
